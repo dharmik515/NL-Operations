@@ -2562,14 +2562,34 @@ def show_daily_delta(hanger_file, totes_file):
 
     st.markdown("""
     <style>
-    .delta-section{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);
-                   border-radius:16px;padding:1.5rem 2rem;margin-bottom:1.5rem;}
-    .delta-title{font-size:1.25rem;font-weight:700;color:#ffffff;margin-bottom:0.3rem;}
-    .delta-sub{font-size:0.85rem;color:#aaaacc;margin-bottom:1rem;}
+    /* delta-section was a wrapper Streamlit auto-closes — no-op */
+    .delta-section { background: transparent; padding: 0; margin: 0; border: none; }
+    .delta-title {
+        font-size: 1.4rem; font-weight: 800; color: #ffffff;
+        background: linear-gradient(135deg, #1a1a2e 0%, #2d1b4e 50%, #0F2D6B 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        margin: 1.25rem 0 0;
+        padding: 1rem 1.5rem 0.4rem;
+        border-radius: 14px 14px 0 0;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255,255,255,0.08); border-bottom: none;
+        line-height: 1.2;
+    }
+    .delta-sub {
+        font-size: 0.88rem; color: #c8ccdf;
+        background: linear-gradient(135deg, #1a1a2e 0%, #2d1b4e 50%, #0F2D6B 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        margin: 0 0 1rem;
+        padding: 0 1.5rem 1rem;
+        border-radius: 0 0 14px 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255,255,255,0.08); border-top: none;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="delta-section">', unsafe_allow_html=True)
     st.markdown('<div class="delta-title">📅 Daily Comparison — What Changed?</div>', unsafe_allow_html=True)
     st.markdown('<div class="delta-sub">Upload yesterday\'s stocktake files to automatically see what moved, what\'s new, and what disappeared — eliminates manual daily reconciliation</div>', unsafe_allow_html=True)
 
@@ -3291,11 +3311,14 @@ with col3:
 st.markdown("---")
 
 # ── Validation messages ───────────────────────────────────────────────────────
-if not stack_file:
-    st.warning("⚠️ Stack Bulk Upload file is mandatory — please upload it to proceed.")
-
-if stack_file and not hanger_files and not totes_files:
+# Stack Bulk is required only to generate the master template. Dashboards
+# (Analytics, Diagnostics, Daily Comparison) only need a stocktake file.
+if not hanger_files and not totes_files and not stack_file:
+    st.info("ℹ️ Upload stocktake files (Hanger / Totes) to use dashboards, plus Stack Bulk to generate the master template.")
+elif not hanger_files and not totes_files:
     st.warning("⚠️ Please upload at least one stocktake file — Hanger or Totes.")
+elif not stack_file:
+    st.info("ℹ️ Stack Bulk file not uploaded — dashboards will work, but Master Template generation requires it.")
 
 # ── Generate button ───────────────────────────────────────────────────────────
 has_stocktake = bool(hanger_files or totes_files)
