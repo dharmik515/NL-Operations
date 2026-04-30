@@ -1272,15 +1272,19 @@ def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
         t = pd.read_excel(totes_file, sheet_name='Sheet1', engine='openpyxl')
         totes_raw = t[t['Room'].notna()].reset_index(drop=True)
 
-    # Use master_df row count as ground truth when available — it covers ALL
-    # uploaded hanger/totes files. Falling back to re-read counts only when
-    # master_df hasn't been generated yet.
+    # Total Devices = real phones only (excludes empty pockets / blank IMEIs).
+    # When master_df is available it already includes Low Value rows merged in.
     if master_df is not None:
-        total_devices = len(master_df)
+        total_devices = int(master_df['IMEI'].apply(_is_real_device).sum())
     else:
-        total_devices = (len(hanger_raw) if hanger_raw is not None else 0) + \
-                        (len(totes_raw)  if totes_raw  is not None else 0)
-    tracked        = len(master_df[master_df['Deal Id'] != 'No deal ID']) if master_df is not None else 0
+        h_real = int(hanger_raw['IMEI'].apply(_is_real_device).sum()) if hanger_raw is not None else 0
+        t_real = int(totes_raw['IMEI'].apply(_is_real_device).sum())  if totes_raw  is not None else 0
+        total_devices = h_real + t_real
+    if master_df is not None:
+        real_mask = master_df['IMEI'].apply(_is_real_device)
+        tracked   = int(((master_df['Deal Id'] != 'No deal ID') & real_mask).sum())
+    else:
+        tracked = 0
     untracked      = total_devices - tracked
     track_pct      = round(tracked / total_devices * 100) if total_devices else 0
 
@@ -2276,8 +2280,9 @@ def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
             st.markdown(f'<div style="font-size:2.5rem;font-weight:800;color:{"#E74C3C" if dup_count else "#70AD47"};">{dup_count}</div>'
                         f'<div style="color:#aaaacc;font-size:0.9rem;">Duplicate IMEIs found</div>', unsafe_allow_html=True)
         with c2:
-            st.markdown(f'<div style="font-size:2.5rem;font-weight:800;color:#4472C4;">{len(imei_df)}</div>'
-                        f'<div style="color:#aaaacc;font-size:0.9rem;">Total unique devices scanned</div>', unsafe_allow_html=True)
+            unique_imei_count = imei_df['IMEI'].nunique()
+            st.markdown(f'<div style="font-size:2.5rem;font-weight:800;color:#4472C4;">{unique_imei_count}</div>'
+                        f'<div style="color:#aaaacc;font-size:0.9rem;">Unique IMEIs</div>', unsafe_allow_html=True)
 
         if dup_count:
             st.markdown(f'<br><span class="badge-red">⚠️ {len(dup_df)} rows flagged — {dup_count} IMEIs appear more than once</span>', unsafe_allow_html=True)
