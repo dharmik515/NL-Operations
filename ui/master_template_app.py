@@ -1106,9 +1106,26 @@ def _clean_imei(val):
     if pd.isna(val): return ''
     return str(val).strip().split('.')[0]
 
+def _concat_stocktake_files(files):
+    """Read multiple stocktake files (Sheet1, Room not null) and concat.
+    Returns a single DataFrame or None if no valid rows found."""
+    if not files:
+        return None
+    frames = []
+    for f in files:
+        try:
+            f.seek(0)
+            df = pd.read_excel(f, sheet_name='Sheet1', engine='openpyxl')
+            df = df[df['Room'].notna()].reset_index(drop=True)
+            if not df.empty:
+                frames.append(df)
+        except Exception:
+            continue
+    return pd.concat(frames, ignore_index=True) if frames else None
+
 
 # ── Analytics Dashboard ───────────────────────────────────────────────────────
-def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
+def show_analytics(hanger_files, totes_files, master_df):  # noqa: C901
     import plotly.express as px
     import plotly.graph_objects as go
 
@@ -1238,19 +1255,9 @@ def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
     </style>
     """, unsafe_allow_html=True)
 
-    # ── Load raw data ─────────────────────────────────────────────────────────
-    hanger_raw = None
-    totes_raw  = None
-
-    if hanger_file:
-        hanger_file.seek(0)
-        h = pd.read_excel(hanger_file, sheet_name='Sheet1', engine='openpyxl')
-        hanger_raw = h[h['Room'].notna()].reset_index(drop=True)
-
-    if totes_file:
-        totes_file.seek(0)
-        t = pd.read_excel(totes_file, sheet_name='Sheet1', engine='openpyxl')
-        totes_raw = t[t['Room'].notna()].reset_index(drop=True)
+    # ── Load raw data — concat ALL uploaded hanger/totes files ───────────────
+    hanger_raw = _concat_stocktake_files(hanger_files)
+    totes_raw  = _concat_stocktake_files(totes_files)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 1 — HERO KPIs
@@ -1258,19 +1265,6 @@ def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
     st.markdown('<div class="dash-section">', unsafe_allow_html=True)
     st.markdown('<div class="dash-title">⚡ Operations Command Center</div>', unsafe_allow_html=True)
     st.markdown('<div class="dash-subtitle">Real-time overview of your warehouse and inventory status</div>', unsafe_allow_html=True)
-
-    # compute top-level numbers
-    hanger_raw = None
-    if hanger_file:
-        hanger_file.seek(0)
-        h = pd.read_excel(hanger_file, sheet_name='Sheet1', engine='openpyxl')
-        hanger_raw = h[h['Room'].notna()].reset_index(drop=True)
-
-    totes_raw = None
-    if totes_file:
-        totes_file.seek(0)
-        t = pd.read_excel(totes_file, sheet_name='Sheet1', engine='openpyxl')
-        totes_raw = t[t['Room'].notna()].reset_index(drop=True)
 
     # Total Devices = real phones only (excludes empty pockets / blank IMEIs).
     # When master_df is available it already includes Low Value rows merged in.
@@ -2174,7 +2168,7 @@ def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
 # ══════════════════════════════════════════════════════════════════════════════
 # SMART DIAGNOSTICS DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
-def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
+def show_diagnostics(hanger_files, totes_files, master_df, lv_files=None):  # noqa: C901
     import plotly.graph_objects as go
     import plotly.express as px
     import re
@@ -2233,24 +2227,16 @@ def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
     st.markdown('<div class="diag-header">🔬 Smart Diagnostics</div>', unsafe_allow_html=True)
     st.markdown('<p style="color:#aaaacc;margin-bottom:1.5rem;">Deep-dive analysis to catch issues, reduce manual effort and optimise your warehouse</p>', unsafe_allow_html=True)
 
-    # ── helpers ───────────────────────────────────────────────────────────────
-    # ── load raw data ─────────────────────────────────────────────────────────
-    hanger_raw = totes_raw = None
-    if hanger_file:
-        hanger_file.seek(0)
-        h = pd.read_excel(hanger_file, sheet_name='Sheet1', engine='openpyxl')
-        hanger_raw = h[h['Room'].notna()].reset_index(drop=True)
-    if totes_file:
-        totes_file.seek(0)
-        t = pd.read_excel(totes_file, sheet_name='Sheet1', engine='openpyxl')
-        totes_raw = t[t['Room'].notna()].reset_index(drop=True)
+    # ── load raw data — concat ALL uploaded hanger/totes files ───────────────
+    hanger_raw = _concat_stocktake_files(hanger_files)
+    totes_raw  = _concat_stocktake_files(totes_files)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 1 — DUPLICATE IMEI DETECTOR
+    # 1 — DUPLICATE IMEI DETECTOR (Hanger + Totes)
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown('<div class="diag-section">', unsafe_allow_html=True)
     st.markdown('<div class="diag-title">🔁 Duplicate IMEI Detector</div>', unsafe_allow_html=True)
-    st.markdown('<div class="diag-sub">Same IMEI appearing in two different locations — data entry error that silently breaks lookups</div>', unsafe_allow_html=True)
+    st.markdown('<div class="diag-sub">Same IMEI appearing in two different locations across all uploaded Hanger + Totes files — data entry error that silently breaks lookups</div>', unsafe_allow_html=True)
 
     all_rows = []
     if hanger_raw is not None:
@@ -2291,6 +2277,67 @@ def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
             st.markdown('<br><span class="badge-green">✅ No duplicate IMEIs — data is clean</span>', unsafe_allow_html=True)
     else:
         st.info("Upload at least one stocktake file to scan for duplicates.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="diag-divider"></div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 1B — LOW VALUE DUPLICATE IMEI DETECTOR
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="diag-section">', unsafe_allow_html=True)
+    st.markdown('<div class="diag-title">🏷️ Low Value — Duplicate IMEI Detector</div>', unsafe_allow_html=True)
+    st.markdown('<div class="diag-sub">Same IMEI appearing more than once across uploaded Low Value files — separate scan from regular stocktake</div>', unsafe_allow_html=True)
+
+    lv_rows = []
+    if lv_files:
+        for f in lv_files:
+            try:
+                f.seek(0)
+                lv_sheet = pd.read_excel(f, sheet_name='Sheet1', engine='openpyxl')
+            except Exception as e:
+                st.warning(f"Could not read Low Value file {getattr(f, 'name', '?')}: {e}")
+                continue
+            for _, row in lv_sheet.iterrows():
+                imei_raw  = row.get('IMEI', '')
+                # LV files often use Barcode as fallback when IMEI is blank
+                if not _is_real_device(imei_raw):
+                    bc = row.get('Barcode', '')
+                    if _is_real_device(bc):
+                        imei_raw = bc
+                    else:
+                        continue
+                imei = _clean_imei(imei_raw)
+                loc  = (str(row.get('Bin No.', '')).strip()
+                        or str(row.get('LOA', '')).strip()
+                        or str(row.get('Location', '')).strip()
+                        or str(row.get('Bin', '')).strip())
+                lv_rows.append({'IMEI':     imei,
+                                'Source':   'Low Value',
+                                'File':     getattr(f, 'name', ''),
+                                'Location': loc,
+                                'Deal ID':  str(row.get('Deal ID', '')).strip()})
+
+    if lv_rows:
+        lv_imei_df = pd.DataFrame(lv_rows)
+        lv_dup_df  = lv_imei_df[lv_imei_df.duplicated('IMEI', keep=False)].sort_values('IMEI').reset_index(drop=True)
+        lv_dup_count = lv_dup_df['IMEI'].nunique()
+
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            st.markdown(f'<div style="font-size:2.5rem;font-weight:800;color:{"#E74C3C" if lv_dup_count else "#70AD47"};">{lv_dup_count}</div>'
+                        f'<div style="color:#aaaacc;font-size:0.9rem;">Duplicate IMEIs in Low Value</div>', unsafe_allow_html=True)
+        with lc2:
+            lv_unique = lv_imei_df['IMEI'].nunique()
+            st.markdown(f'<div style="font-size:2.5rem;font-weight:800;color:#9B59B6;">{lv_unique}</div>'
+                        f'<div style="color:#aaaacc;font-size:0.9rem;">Unique LV IMEIs</div>', unsafe_allow_html=True)
+
+        if lv_dup_count:
+            st.markdown(f'<br><span class="badge-red">⚠️ {len(lv_dup_df)} LV rows flagged — {lv_dup_count} IMEIs appear more than once</span>', unsafe_allow_html=True)
+            st.dataframe(lv_dup_df, use_container_width=True, hide_index=True)
+        else:
+            st.markdown('<br><span class="badge-green">✅ No duplicate IMEIs in Low Value — data is clean</span>', unsafe_allow_html=True)
+    else:
+        st.info("No Low Value files uploaded — upload one via the Totes button to scan for LV duplicates.")
 
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div class="diag-divider"></div>', unsafe_allow_html=True)
@@ -2543,25 +2590,10 @@ def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
 # ══════════════════════════════════════════════════════════════════════════════
 # DAILY DELTA REPORT — standalone function
 # ══════════════════════════════════════════════════════════════════════════════
-def show_daily_delta(hanger_file, totes_file):
-    hanger_raw = None
-    totes_raw  = None
-
-    if hanger_file:
-        try:
-            hanger_file.seek(0)
-            hanger_raw = pd.read_excel(hanger_file, sheet_name='Sheet1', engine='openpyxl')
-            hanger_raw = hanger_raw[hanger_raw['Room'].notna()].reset_index(drop=True)
-        except Exception:
-            hanger_raw = None
-
-    if totes_file:
-        try:
-            totes_file.seek(0)
-            totes_raw = pd.read_excel(totes_file, sheet_name='Sheet1', engine='openpyxl')
-            totes_raw = totes_raw[totes_raw['Room'].notna()].reset_index(drop=True)
-        except Exception:
-            totes_raw = None
+def show_daily_delta(hanger_files, totes_files):
+    # Concat all uploaded hanger/totes files for today's snapshot
+    hanger_raw = _concat_stocktake_files(hanger_files)
+    totes_raw  = _concat_stocktake_files(totes_files)
 
     import plotly.graph_objects as go
 
@@ -3592,19 +3624,19 @@ if has_stocktake:
 
     master_for_dash = st.session_state.get('master_df_result', None)
 
-    _dash_hanger = hanger_files[0] if hanger_files else None
-    # Only pass a regular totes file (not LV) to dashboards — LV files lack 'Room' column
-    _regular_totes = [f for f in totes_files if not is_low_value_file(f)]
-    _dash_totes = _regular_totes[0] if _regular_totes else None
+    _dash_hangers = hanger_files or []
+    # Regular totes (no LV) for dashboards/diagnostics; LV files passed separately.
+    _regular_totes = [f for f in (totes_files or []) if not is_low_value_file(f)]
+    _lv_files      = [f for f in (totes_files or []) if is_low_value_file(f)]
 
     if st.session_state.show_analytics:
-        show_analytics(_dash_hanger, _dash_totes, master_for_dash)
+        show_analytics(_dash_hangers, _regular_totes, master_for_dash)
 
     if st.session_state.show_diagnostics:
-        show_diagnostics(_dash_hanger, _dash_totes, master_for_dash)
+        show_diagnostics(_dash_hangers, _regular_totes, master_for_dash, _lv_files)
 
     if st.session_state.show_delta:
-        show_daily_delta(_dash_hanger, _dash_totes)
+        show_daily_delta(_dash_hangers, _regular_totes)
 
     if st.session_state.show_stock_intel:
         if not stack_file:
