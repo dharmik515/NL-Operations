@@ -2628,15 +2628,16 @@ def show_daily_delta(hanger_files, totes_files):
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="delta-title">📅 Daily Comparison — What Changed?</div>', unsafe_allow_html=True)
-    st.markdown('<div class="delta-sub">Upload yesterday\'s stocktake files to automatically see what moved, what\'s new, and what disappeared — eliminates manual daily reconciliation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="delta-sub">Upload yesterday\'s generated master template to automatically see what moved, what\'s new, and what disappeared — eliminates manual daily reconciliation</div>', unsafe_allow_html=True)
 
-    dc1, dc2 = st.columns(2)
-    with dc1:
-        prev_hanger = st.file_uploader("📁 Yesterday's Hanger file", type=['xlsx','xlsm','xls'], key='prev_hanger_delta')
-    with dc2:
-        prev_totes  = st.file_uploader("🗂️ Yesterday's Totes file",  type=['xlsx','xlsm','xls'], key='prev_totes_delta')
+    prev_master = st.file_uploader(
+        "📁 Yesterday's Master Template",
+        type=['xlsx', 'xlsm', 'xls'],
+        key='prev_master_delta',
+        help="Upload the master template Excel file generated yesterday — single file with Hanger + Totes data"
+    )
 
-    if prev_hanger or prev_totes:
+    if prev_master:
         _delta_result = {}
         with st.spinner("Processing and comparing files — please wait..."):
             # build today's IMEI→location map
@@ -2659,24 +2660,29 @@ def show_daily_delta(hanger_files, totes_files):
                     loc  = str(row.get('LOA','')).strip()
                     today_map[imei] = ('Totes', loc)
 
-            # build yesterday's IMEI→location map
+            # build yesterday's IMEI→location map from the master template file
             yest_map = {}
-            for src, pf in [('Hanger', prev_hanger), ('Totes', prev_totes)]:
-                if pf is None: continue
-                pf.seek(0)
+            try:
+                prev_master.seek(0)
                 try:
-                    pdf = pd.read_excel(pf, sheet_name='Sheet1', engine='openpyxl')
-                    pdf = pdf[pdf['Room'].notna()].reset_index(drop=True)
-                    for _, row in pdf.iterrows():
-                        if not _is_real_device(row.get('IMEI','')): continue
-                        imei = _clean_imei(row['IMEI'])
-                        if src == 'Hanger':
-                            loc = (str(int(row['Hangar'])) if pd.notna(row.get('Hangar')) else '') + str(row.get('LOA','')).strip()
-                        else:
-                            loc = str(row.get('LOA','')).strip()
-                        yest_map[imei] = (src, loc)
-                except Exception as e:
-                    st.error(f"Could not read previous {src} file: {e}")
+                    pdf = pd.read_excel(prev_master, sheet_name='StockTake Template', engine='openpyxl')
+                except Exception:
+                    prev_master.seek(0)
+                    pdf = pd.read_excel(prev_master, sheet_name=0, engine='openpyxl')
+
+                for _, row in pdf.iterrows():
+                    if not _is_real_device(row.get('IMEI','')): continue
+                    imei     = _clean_imei(row['IMEI'])
+                    bin_val  = str(row.get('Bin', '')).strip().lower()
+                    room_val = str(row.get('Room', '')).strip().lower()
+                    loc      = str(row.get('Location', '')).strip()
+                    # Skip Low Value rows so yesterday matches today's scope (today doesn't include LV)
+                    if room_val == 'inventory':
+                        continue
+                    src = 'Hanger' if bin_val == 'hanger' else 'Totes'
+                    yest_map[imei] = (src, loc)
+            except Exception as e:
+                st.error(f"Could not read yesterday's master template: {e}")
 
             new_devices  = {k: today_map[k] for k in today_map if k not in yest_map}
             removed_devs = {k: yest_map[k]  for k in yest_map  if k not in today_map}
