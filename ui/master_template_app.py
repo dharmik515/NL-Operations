@@ -349,6 +349,13 @@ st.markdown("""
         line-height: 1.1;
         letter-spacing: -0.5px;
     }
+    /* When an inline color is provided on .metric-num (e.g. red for AE/No Deal ID), honor it */
+    .metric-num[style*="color"] {
+        background: none !important;
+        -webkit-background-clip: initial !important;
+        -webkit-text-fill-color: initial !important;
+        background-clip: initial !important;
+    }
     .metric-lbl {
         font-size: 0.78rem;
         color: #5b6478;
@@ -1079,93 +1086,117 @@ def show_analytics(hanger_file, totes_file, master_df):  # noqa: C901
     # ── Dark dashboard CSS ────────────────────────────────────────────────────
     st.markdown("""
     <style>
-    .dash-section {
-        background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);
-        border-radius: 20px;
-        padding: 2rem;
-        margin: 1rem 0;
-        border: 1px solid rgba(255,255,255,0.08);
-    }
+    /* dash-section was a wrapper that Streamlit auto-closes, leaving an empty
+       dark bar. Make it a no-op so it doesn't render visually. */
+    .dash-section { background: transparent; padding: 0; margin: 0; border: none; }
+
+    /* dash-title becomes the actual section banner — gradient bg + white text */
     .dash-title {
-        font-size: 1.6rem;
-        font-weight: 700;
+        font-size: 1.5rem;
+        font-weight: 800;
         color: #ffffff;
-        letter-spacing: 1px;
-        margin-bottom: 0.3rem;
+        letter-spacing: 0.3px;
+        margin: 1.25rem 0 0;
+        background: linear-gradient(135deg, #0d0d1f 0%, #1a1a2e 45%, #16213e 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        padding: 1rem 1.5rem 0.4rem;
+        border-radius: 14px 14px 0 0;
+        box-shadow: 0 -4px 18px rgba(15, 23, 42, 0.18);
+        line-height: 1.2;
     }
     .dash-subtitle {
-        font-size: 0.9rem;
-        color: #aaaacc;
-        margin-bottom: 1.5rem;
+        font-size: 0.88rem;
+        color: #c8ccdf;
+        margin: 0 0 1rem;
+        background: linear-gradient(135deg, #0d0d1f 0%, #1a1a2e 45%, #16213e 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        padding: 0 1.5rem 1rem;
+        border-radius: 0 0 14px 14px;
+        box-shadow: 0 4px 18px rgba(15, 23, 42, 0.18);
     }
+    /* Hero KPI cards — light theme on light page */
     .hero-card {
-        background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 16px;
-        padding: 1.5rem;
-        text-align: center;
+        background: rgba(255, 255, 255, 0.92);
         backdrop-filter: blur(10px);
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 16px;
+        padding: 1.4rem 1.2rem;
+        text-align: center;
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+        transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease;
+        animation: fadeInUp 0.5s ease-out;
+    }
+    .hero-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 14px 32px rgba(15, 98, 254, 0.15);
     }
     .hero-num {
-        font-size: 3rem;
-        font-weight: 800;
+        font-size: 2.6rem;
+        font-weight: 900;
         line-height: 1;
-        background: linear-gradient(90deg, #4472C4, #70AD47);
+        background: linear-gradient(135deg, #0F62FE, #6929C4);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        background-clip: text;
+        letter-spacing: -1px;
     }
     .hero-lbl {
-        font-size: 0.85rem;
-        color: #aaaacc;
-        margin-top: 0.4rem;
+        font-size: 0.78rem;
+        color: #5b6478;
+        margin-top: 0.5rem;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 0.8px;
+        font-weight: 700;
     }
     .hero-sub {
-        font-size: 1rem;
-        font-weight: 600;
-        margin-top: 0.2rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #5b6478 !important;
+        margin-top: 0.35rem;
+        line-height: 1.4;
     }
-    .slot-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 0.5rem;
-    }
+    /* Slot grid — works on light bg too */
+    .slot-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 0.5rem; }
     .slot-filled {
         width: 28px; height: 28px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #4472C4, #70AD47);
+        background: linear-gradient(135deg, #0F62FE, #6929C4);
         display: flex; align-items: center; justify-content: center;
         font-size: 0.55rem; color: white; font-weight: 700;
-        box-shadow: 0 0 8px rgba(68,114,196,0.6);
+        box-shadow: 0 0 8px rgba(15, 98, 254, 0.5);
         cursor: default;
+        transition: transform 0.15s ease;
     }
+    .slot-filled:hover { transform: scale(1.15); }
     .slot-empty {
         width: 28px; height: 28px;
         border-radius: 50%;
-        background: rgba(255,255,255,0.06);
-        border: 1px dashed rgba(255,255,255,0.2);
+        background: rgba(15, 23, 42, 0.04);
+        border: 1px dashed rgba(15, 23, 42, 0.2);
         display: flex; align-items: center; justify-content: center;
-        font-size: 0.55rem; color: rgba(255,255,255,0.3); font-weight: 700;
+        font-size: 0.55rem; color: rgba(15, 23, 42, 0.35); font-weight: 700;
     }
     .hanger-label {
         font-size: 0.75rem;
-        color: #aaaacc;
-        font-weight: 600;
+        color: #5b6478;
+        font-weight: 700;
         margin-bottom: 4px;
-        letter-spacing: 1px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
     }
     .hanger-block {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.07);
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px solid rgba(15, 23, 42, 0.08);
         border-radius: 12px;
-        padding: 0.75rem;
+        padding: 0.85rem;
         margin-bottom: 0.75rem;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
     }
     .section-divider {
         height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+        background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.18), transparent);
         margin: 2rem 0;
     }
     </style>
@@ -2113,27 +2144,49 @@ def show_diagnostics(hanger_file, totes_file, master_df):  # noqa: C901
     st.markdown("""
     <style>
     .diag-header {
-        font-size: 2rem; font-weight: 800; color: #fff;
-        background: linear-gradient(90deg,#f5576c,#f093fb);
+        font-size: 2.2rem; font-weight: 900;
+        background: linear-gradient(90deg,#f5576c,#f093fb,#6929C4);
+        background-size: 200% 200%;
+        animation: gradientShift 8s ease infinite;
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        margin-bottom: 0.3rem;
+        background-clip: text;
+        margin: 0.5rem 0 0.3rem;
+        letter-spacing: -0.5px;
     }
-    .diag-section {
-        background: linear-gradient(135deg,#0f0f1a 0%,#1a1a2e 100%);
-        border-radius: 20px; padding: 2rem; margin: 1.2rem 0;
-        border: 1px solid rgba(255,255,255,0.08);
+    /* diag-section was a wrapper Streamlit auto-closes — make it a no-op */
+    .diag-section { background: transparent; padding: 0; margin: 0; border: none; }
+
+    /* diag-title becomes the actual section banner */
+    .diag-title {
+        font-size: 1.4rem; font-weight: 800; color: #fff;
+        background: linear-gradient(135deg, #0d0d1f 0%, #1a1a2e 45%, #2d1b4e 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        margin: 1.25rem 0 0;
+        padding: 1rem 1.5rem 0.4rem;
+        border-radius: 14px 14px 0 0;
+        box-shadow: 0 -4px 18px rgba(15, 23, 42, 0.18);
+        line-height: 1.2;
     }
-    .diag-title  { font-size:1.4rem; font-weight:700; color:#fff; margin-bottom:0.2rem; }
-    .diag-sub    { font-size:0.88rem; color:#aaaacc; margin-bottom:1.2rem; }
+    .diag-sub {
+        font-size: 0.88rem; color: #c8ccdf;
+        background: linear-gradient(135deg, #0d0d1f 0%, #1a1a2e 45%, #2d1b4e 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite;
+        margin: 0 0 1rem;
+        padding: 0 1.5rem 1rem;
+        border-radius: 0 0 14px 14px;
+        box-shadow: 0 4px 18px rgba(15, 23, 42, 0.18);
+    }
     .badge-red   { background:#E74C3C22; color:#E74C3C; border:1px solid #E74C3C55;
                    border-radius:8px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700; }
-    .badge-green { background:#70AD4722; color:#70AD47; border:1px solid #70AD4755;
+    .badge-green { background:#70AD4722; color:#1f7a2e; border:1px solid #70AD4755;
                    border-radius:8px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700; }
-    .badge-blue  { background:#4472C422; color:#4472C4; border:1px solid #4472C455;
+    .badge-blue  { background:#0F62FE22; color:#0F62FE; border:1px solid #0F62FE55;
                    border-radius:8px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700; }
-    .badge-gold  { background:#FFC00022; color:#FFC000; border:1px solid #FFC00055;
+    .badge-gold  { background:#FFC00022; color:#a87e00; border:1px solid #FFC00055;
                    border-radius:8px; padding:0.2rem 0.6rem; font-size:0.8rem; font-weight:700; }
-    .diag-divider { height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent); margin:2rem 0; }
+    .diag-divider { height:1px; background:linear-gradient(90deg,transparent,rgba(15, 23, 42, 0.18),transparent); margin:2rem 0; }
     </style>
     """, unsafe_allow_html=True)
 
