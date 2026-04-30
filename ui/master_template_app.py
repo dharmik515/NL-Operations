@@ -75,53 +75,43 @@ st.markdown("""
 
     .stApp {
         background:
-            radial-gradient(900px 500px at 12% 8%,  rgba(15, 98, 254, 0.28), transparent 55%),
-            radial-gradient(800px 500px at 88% 12%, rgba(105, 41, 196, 0.26), transparent 55%),
-            radial-gradient(700px 450px at 50% 50%, rgba(255, 77, 141, 0.18), transparent 60%),
-            radial-gradient(900px 500px at 18% 95%, rgba(8, 189, 186, 0.22), transparent 55%),
-            radial-gradient(800px 450px at 92% 88%, rgba(255, 192, 0, 0.16), transparent 55%),
-            linear-gradient(135deg, #eef2fb 0%, #e6ecf9 30%, #f1eaf9 65%, #e8f5f4 100%);
-        background-size: 200% 200%, 200% 200%, 200% 200%, 200% 200%, 200% 200%, 200% 200%;
+            radial-gradient(circle, rgba(15, 23, 42, 0.07) 1px, transparent 1px) 0 0 / 26px 26px,
+            radial-gradient(900px 600px at 10% 5%,   rgba(15, 98, 254, 0.42), transparent 55%),
+            radial-gradient(900px 600px at 90% 8%,   rgba(105, 41, 196, 0.40), transparent 55%),
+            radial-gradient(800px 500px at 50% 45%,  rgba(255, 77, 141, 0.28), transparent 60%),
+            radial-gradient(900px 600px at 12% 95%,  rgba(8, 189, 186, 0.36), transparent 55%),
+            radial-gradient(900px 550px at 92% 88%,  rgba(255, 192, 0, 0.26), transparent 55%),
+            linear-gradient(135deg, #d8e2f5 0%, #cfd9f0 25%, #ddd0ee 55%, #c9e9e5 80%, #e6e0f3 100%);
         background-attachment: fixed;
-        animation: gradientShift 20s ease infinite;
-        position: relative;
     }
-    /* Animated floating orbs — sit behind content, blur for soft mesh look */
+    /* Animated floating orbs — heavily blurred mesh accents behind content */
     .stApp::before, .stApp::after {
         content: '';
         position: fixed;
         border-radius: 50%;
-        filter: blur(80px);
-        opacity: 0.55;
+        filter: blur(90px);
+        opacity: 0.75;
         pointer-events: none;
         z-index: 0;
     }
     .stApp::before {
-        width: 520px; height: 520px;
-        top: -120px; left: -100px;
-        background: radial-gradient(circle, #6929C4 0%, #0F62FE 70%, transparent 100%);
+        width: 560px; height: 560px;
+        top: -140px; left: -120px;
+        background: radial-gradient(circle, #6929C4 0%, #0F62FE 60%, transparent 100%);
         animation: blob 18s ease-in-out infinite;
     }
     .stApp::after {
-        width: 460px; height: 460px;
-        bottom: -100px; right: -80px;
-        background: radial-gradient(circle, #FF4D8D 0%, #08BDBA 70%, transparent 100%);
+        width: 500px; height: 500px;
+        bottom: -120px; right: -100px;
+        background: radial-gradient(circle, #FF4D8D 0%, #08BDBA 65%, transparent 100%);
         animation: blob 22s ease-in-out infinite reverse;
     }
-    /* Subtle dot-grid overlay for industrial texture */
-    .stApp > div:first-child::before {
-        content: '';
-        position: fixed;
-        inset: 0;
-        background-image:
-            radial-gradient(circle, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
-        background-size: 28px 28px;
-        pointer-events: none;
-        z-index: 0;
-        opacity: 0.5;
-    }
     /* Lift content above the animated background */
-    .block-container, [data-testid="stSidebar"] { position: relative; z-index: 1; }
+    .block-container, [data-testid="stSidebar"], header[data-testid="stHeader"] {
+        position: relative; z-index: 1;
+    }
+    /* Make the default header transparent so the background shows through */
+    header[data-testid="stHeader"] { background: transparent !important; }
     .block-container {
         padding-top: 1.5rem;
         padding-bottom: 4rem;
