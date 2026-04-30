@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE / OS / agent state
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Data files (never commit production uploads)
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+
+# Allow sample/demo data if placed under sample_data/
+!sample_data/*.xlsx
+!sample_data/*.xlsm
+
+# Logs / temp
+*.log
+*.tmp
