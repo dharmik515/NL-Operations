@@ -638,6 +638,57 @@ def is_low_value_file(file) -> bool:
         return False
 
 
+# ── INBOUND file detector ─────────────────────────────────────────────────────
+def is_inbound_file(file) -> bool:
+    """Returns True if the uploaded file is an INBOUND stocktake file.
+    Detection rule: Sheet1 has 'Room' column with value 'INBOUND'
+    """
+    try:
+        file.seek(0)
+        df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl', nrows=5)
+        if 'Room' in df.columns:
+            room_values = df['Room'].dropna().unique()
+            return 'INBOUND' in room_values
+        return False
+    except Exception:
+        file.seek(0)
+        return False
+
+
+# ── EVAL file detector ────────────────────────────────────────────────────────
+def is_eval_file(file) -> bool:
+    """Returns True if the uploaded file is an EVAL stocktake file.
+    Detection rule: Sheet1 has 'Room' column with value 'EVAL'
+    """
+    try:
+        file.seek(0)
+        df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl', nrows=5)
+        if 'Room' in df.columns:
+            room_values = df['Room'].dropna().unique()
+            return 'EVAL' in room_values
+        return False
+    except Exception:
+        file.seek(0)
+        return False
+
+
+# ── LV ERROR BOX file detector ────────────────────────────────────────────────
+def is_lv_error_box_file(file) -> bool:
+    """Returns True if the uploaded file is an LV ERROR BOX file.
+    Detection rule: Sheet1 has only 'Bin' and 'Barcode' columns
+    """
+    try:
+        file.seek(0)
+        df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl', nrows=2)
+        cols = [c.lower().strip() for c in df.columns]
+        # LV ERROR BOX has exactly 2 columns: Bin and Barcode
+        return 'bin' in cols and 'barcode' in cols and len(cols) == 2
+    except Exception:
+        file.seek(0)
+        return False
+
+
+
 # ── Stack Bulk reader with auto-repair ────────────────────────────────────────
 def read_stack_bulk(file):
     """
@@ -759,12 +810,20 @@ def process_hanger(file):
         'IMEI':     df['IMEI'].apply(clean_imei),
         'Deal Id':  df['_deal'],
     }).reset_index(drop=True)
+    
+    # Replace all NaN values with empty strings
+    result = result.fillna('')
+    
+    # Filter out rows with BOTH empty IMEI AND empty Location
+    # Keep all rows - all inventory should be tracked in master template
 
     stats = {
         'original_rows': original_rows,
         'ae_deal_id':    ae_deal_id,
         'ae_backend':    ae_backend,
         'no_deal_id':    no_deal,
+        'rows_output':   len(result),
+        'rows_skipped':  original_rows - len(result),
     }
     return result, stats
 
@@ -814,12 +873,299 @@ def process_totes(file):
         'IMEI':     df['IMEI'].apply(clean_imei),
         'Deal Id':  df['_deal'],
     }).reset_index(drop=True)
+    
+    # Replace all NaN values with empty strings
+    result = result.fillna('')
+    
+    # Filter out rows with BOTH empty IMEI AND empty Location
+    # Keep all rows - all inventory should be tracked in master template
 
     stats = {
         'original_rows': original_rows,
         'ae_deal_id':    ae_deal_id,
         'ae_backend':    ae_backend,
         'no_deal_id':    no_deal,
+        'rows_output':   len(result),
+        'rows_skipped':  original_rows - len(result),
+    }
+    return result, stats
+
+
+# ── INBOUND processing ────────────────────────────────────────────────────────
+def process_inbound(file):
+    """
+    Process INBOUND STOCKTAKE file.
+    Room = 'INBOUND', Bin = 'Totes', Location = LOA (tote ID)
+    
+    Multi-level Deal ID matching:
+      1. Check BACKEND column for AE codes
+      2. Lookup Barcode in Sheet2 to get Appraisal Code
+      3. Fallback to 'No deal ID'
+    """
+    file.seek(0)
+    df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl')
+    
+    # Drop completely empty rows
+    df = df[df['Room'].notna()].reset_index(drop=True)
+    original_rows = len(df)
+    
+    # Read Sheet2 for barcode lookup
+    file.seek(0)
+    try:
+        sheet2 = pd.read_excel(file, sheet_name='Sheet2', engine='openpyxl')
+        # Build barcode → appraisal code lookup
+        barcode_lookup = {}
+        for _, row in sheet2.iterrows():
+            bc = row.get('Barcode', '')
+            appr = row.get('Appraisal Code', '')
+            if pd.notna(bc) and pd.notna(appr):
+                # Normalize barcode (remove decimals)
+                bc_clean = str(int(float(bc))) if isinstance(bc, (int, float)) else str(bc).strip()
+                barcode_lookup[bc_clean] = str(appr).strip()
+    except Exception:
+        barcode_lookup = {}
+    
+    # Helper function to clean IMEI
+    def clean_imei(val):
+        if pd.isna(val):
+            return ''
+        if isinstance(val, float):
+            return str(int(val))
+        return str(val).strip()
+    
+    # Helper function to clean Location (LOA)
+    def clean_location(val):
+        if pd.isna(val):
+            return ''
+        if isinstance(val, float):
+            return str(int(val))
+        return str(val).strip()
+    
+    # Process each row
+    rows = []
+    ae_backend_count = 0
+    sheet2_match_count = 0
+    no_deal_count = 0
+    
+    for _, row in df.iterrows():
+        # Get IMEI (allow empty - not all devices have IMEI)
+        imei_val = clean_imei(row.get('IMEI', ''))
+        
+        # Multi-level Deal ID matching
+        deal_id = None
+        
+        # Level 1: Check BACKEND column
+        backend_val = row.get('BACKEND', '')
+        if pd.notna(backend_val):
+            backend = str(backend_val).strip()
+            if 'AE' in backend.upper() and backend.upper() != 'NAN' and backend != '0':
+                deal_id = backend
+                ae_backend_count += 1
+        
+        # Level 2: Lookup IMEI in Sheet2 (if IMEI exists)
+        if not deal_id and imei_val:
+            if imei_val in barcode_lookup:
+                deal_id = barcode_lookup[imei_val]
+                sheet2_match_count += 1
+        
+        # Level 3: Fallback to 'No deal ID'
+        if not deal_id:
+            deal_id = 'No deal ID'
+            no_deal_count += 1
+        
+        # Get location
+        location = clean_location(row.get('LOA', ''))
+        
+        # Include all rows - don't skip based on empty IMEI/Location
+        # (EVAL and LV ERROR files may have empty values but are still valid)
+        
+        rows.append({
+            'Room':     'INBOUND',
+            'Bin':      'Totes',
+            'Location': location,
+            'IMEI':     imei_val,
+            'Deal Id':  deal_id,
+        })
+    
+    result = pd.DataFrame(rows)
+    
+    # Replace all NaN values with empty strings
+    result = result.fillna('')
+    
+    stats = {
+        'original_rows': original_rows,
+        'ae_backend':    ae_backend_count,
+        'sheet2_match':  sheet2_match_count,
+        'no_deal_id':    no_deal_count,
+        'rows_output':   len(result),
+        'rows_skipped':  original_rows - len(result),
+    }
+    return result, stats
+
+
+# ── EVAL processing ───────────────────────────────────────────────────────────
+def process_eval(file):
+    """
+    Process EVAL STOCKTAKE file.
+    Room = 'EVAL', Bin = 'Evaluation', Location = LOA (EVCAM, PEV, etc.)
+    
+    Multi-level Deal ID matching:
+      1. Check BACKEND column for codes
+      2. Lookup Serial Number in Sheet2 to get Appraisal Code
+      3. Fallback to 'No deal ID'
+    """
+    file.seek(0)
+    df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl')
+    
+    # Drop completely empty rows
+    df = df[df['Room'].notna()].reset_index(drop=True)
+    original_rows = len(df)
+    
+    # Read Sheet2 for serial number lookup
+    file.seek(0)
+    try:
+        sheet2 = pd.read_excel(file, sheet_name='Sheet2', engine='openpyxl')
+        # Build serial number → appraisal code lookup
+        serial_lookup = {}
+        for _, row in sheet2.iterrows():
+            sn = row.get('Serial Number', '')
+            appr = row.get('Appraisal Code', '')
+            if pd.notna(sn) and pd.notna(appr):
+                serial_lookup[str(sn).strip()] = str(appr).strip()
+    except Exception:
+        serial_lookup = {}
+    
+    # Helper function to clean IMEI/Serial
+    def clean_imei(val):
+        if pd.isna(val):
+            return ''
+        if isinstance(val, float):
+            return str(int(val))
+        return str(val).strip()
+    
+    # Helper function to clean Location (LOA)
+    def clean_location(val):
+        if pd.isna(val):
+            return ''
+        if isinstance(val, float):
+            return str(int(val))
+        return str(val).strip()
+    
+    # Process each row
+    rows = []
+    ae_backend_count = 0
+    sheet2_match_count = 0
+    no_deal_count = 0
+    
+    for _, row in df.iterrows():
+        # Get IMEI (use as-is, might be serial number)
+        imei_val = clean_imei(row.get('IMEI', ''))
+        
+        # Multi-level Deal ID matching
+        deal_id = None
+        
+        # Level 1: Check BACKEND column
+        backend_val = row.get('BACKEND', '')
+        if pd.notna(backend_val):
+            backend = str(backend_val).strip()
+            if backend and backend.upper() != 'NAN' and 'AE' in backend.upper():
+                deal_id = backend
+                ae_backend_count += 1
+        
+        # Level 2: Lookup IMEI (which might be serial number) in Sheet2
+        if not deal_id and imei_val:
+            if imei_val in serial_lookup:
+                deal_id = serial_lookup[imei_val]
+                sheet2_match_count += 1
+        
+        # Level 3: Fallback to 'No deal ID'
+        if not deal_id:
+            deal_id = 'No deal ID'
+            no_deal_count += 1
+        
+        # Get location
+        location = clean_location(row.get('LOA', ''))
+        
+        # Include all rows - don't skip based on empty IMEI/Location
+        # (EVAL products may have empty values but are still valid inventory)
+        
+        rows.append({
+            'Room':     'EVAL',
+            'Bin':      'Evaluation',
+            'Location': location,
+            'IMEI':     imei_val,
+            'Deal Id':  deal_id,
+        })
+    
+    result = pd.DataFrame(rows)
+    
+    # Replace all NaN values with empty strings
+    result = result.fillna('')
+    
+    stats = {
+        'original_rows': original_rows,
+        'ae_backend':    ae_backend_count,
+        'sheet2_match':  sheet2_match_count,
+        'no_deal_id':    no_deal_count,
+        'rows_output':   len(result),
+        'rows_skipped':  original_rows - len(result),
+    }
+    return result, stats
+
+
+# ── LV ERROR BOX processing ───────────────────────────────────────────────────
+def process_lv_error_box(file):
+    """
+    Process LV ERROR BOX file.
+    Room = 'Inventory', Bin = 'Totes', Location = 'R151'
+    
+    These are error items that couldn't be scanned/matched.
+    All will have Deal Id = 'No deal ID'
+    """
+    file.seek(0)
+    df = pd.read_excel(file, sheet_name='Sheet1', engine='openpyxl')
+    
+    original_rows = len(df)
+    
+    # Helper function to clean barcode
+    def clean_barcode(val):
+        if pd.isna(val):
+            return ''
+        if isinstance(val, float):
+            return str(int(val))
+        return str(val).strip()
+    
+    # Helper function to clean location
+    def clean_location(val):
+        if pd.isna(val):
+            return 'R151'  # Default location for error box
+        if isinstance(val, float):
+            return str(int(val))
+        s = str(val).strip()
+        return s if s else 'R151'
+    
+    # Process each row
+    rows = []
+    for _, row in df.iterrows():
+        barcode = clean_barcode(row.get('Barcode', ''))
+        location = clean_location(row.get('Bin', 'R151'))  # Use Bin column as location
+        
+        rows.append({
+            'Room':     'Inventory',
+            'Bin':      'Totes',
+            'Location': location,
+            'IMEI':     barcode,
+            'Deal Id':  'No deal ID',  # Always 'No deal ID' for error box
+        })
+    
+    result = pd.DataFrame(rows)
+    
+    # Replace all NaN values with empty strings
+    result = result.fillna('')
+    
+    stats = {
+        'original_rows': original_rows,
+        'no_deal_id':    original_rows,  # All are 'No deal ID'
     }
     return result, stats
 
@@ -883,7 +1229,11 @@ def build_low_value_template(lv_file) -> pd.DataFrame:
             'Conversion': conversion,
             'PP in AED':  '',
         })
-    return pd.DataFrame(rows)
+    
+    df = pd.DataFrame(rows)
+    # Replace all NaN values with empty strings
+    df = df.fillna('')
+    return df
 
 
 # ── Low Value master template builder ────────────────────────────────────────
@@ -990,7 +1340,11 @@ def build_low_value_template(lv_file) -> pd.DataFrame:
             'Conversion': conversion,
             'PP in AED':  s.get('PP in AED', pp_aed) if s else pp_aed,
         })
-    return pd.DataFrame(rows)
+    
+    df = pd.DataFrame(rows)
+    # Replace all NaN values with empty strings
+    df = df.fillna('')
+    return df
 
 
 # ── Stack Bulk lookup builder ──────────────────────────────────────────────────
@@ -1042,11 +1396,15 @@ def build_master_template(hanger_df: pd.DataFrame, lookup: dict) -> pd.DataFrame
             'Conversion': conversion,
             'PP in AED':  '',
         })
-    return pd.DataFrame(rows)
+    # Replace all NaN values with empty strings
+    df = pd.DataFrame(rows)
+    df = df.fillna('')
+    return df
 
 
 # ── Excel export with formatting ──────────────────────────────────────────────
-def export_excel(df: pd.DataFrame) -> BytesIO:
+# Note: Caching removed to ensure fresh data on every download
+def export_excel(_df: pd.DataFrame) -> BytesIO:
     import xlsxwriter as xw
 
     col_widths = {
@@ -1056,11 +1414,12 @@ def export_excel(df: pd.DataFrame) -> BytesIO:
         'Country': 22, 'PP': 10, 'Conversion': 12, 'PP in AED': 13,
     }
 
-    # Clean IMEI before writing
-    df = df.copy()
+    # Clean IMEI and replace all NaN with empty strings
+    df = _df.copy()
+    df = df.fillna('')  # Replace all NaN values with empty strings
     if 'IMEI' in df.columns:
         df['IMEI'] = df['IMEI'].apply(
-            lambda v: str(v).strip().split('.')[0] if pd.notna(v) else ''
+            lambda v: str(v).strip().split('.')[0] if v else ''
         )
 
     output = BytesIO()
@@ -3316,8 +3675,8 @@ with col1:
 with col2:
     st.markdown(
         '<div class="upload-card">'
-        '<div class="upload-title">🗂️ Totes / Low Value Stocktake File</div>'
-        '<div class="upload-sub">Upload totes and/or low value .xlsm files — Low Value files are auto-detected and included in the master template</div>'
+        '<div class="upload-title">🗂️ Totes / INBOUND / EVAL / Low Value Files</div>'
+        '<div class="upload-sub">Upload totes, INBOUND, EVAL, LV ERROR BOX, and/or low value .xlsm files — all types are auto-detected and merged</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -3331,7 +3690,17 @@ with col2:
     totes_file = totes_files[0] if len(totes_files) == 1 else (totes_files if totes_files else None)
     if totes_files:
         for f in totes_files:
-            _label = "🏷️ Low Value" if is_low_value_file(f) else "🗂️ Totes"
+            # Detect file type
+            if is_inbound_file(f):
+                _label = "📥 INBOUND"
+            elif is_eval_file(f):
+                _label = "🔬 EVAL"
+            elif is_lv_error_box_file(f):
+                _label = "⚠️ LV ERROR BOX"
+            elif is_low_value_file(f):
+                _label = "🏷️ Low Value"
+            else:
+                _label = "🗂️ Totes"
             st.success(f"✅ {f.name} — {_label}")
 
 with col3:
@@ -3373,6 +3742,9 @@ if has_stocktake and stack_file:
         frames = []
         h_stats = None
         t_stats = None
+        inbound_stats = []  # Store stats for all INBOUND files
+        eval_stats = []     # Store stats for all EVAL files
+        lv_error_stats = [] # Store stats for all LV ERROR BOX files
         lv_frames = []   # Low Value rows — processed separately, merged at end
 
         if hanger_files:
@@ -3395,8 +3767,46 @@ if has_stocktake and stack_file:
 
         if totes_files:
             t_frames = []
+            inbound_frames = []
+            eval_frames = []
+            lv_error_frames = []
+            
             for _tf in totes_files:
-                if is_low_value_file(_tf):
+                # Detect file type and process accordingly
+                if is_inbound_file(_tf):
+                    with st.spinner(f"Processing INBOUND file: {_tf.name}..."):
+                        try:
+                            _idf, _is = process_inbound(_tf)
+                            frames.append(_idf)
+                            inbound_stats.append(_is)
+                            st.success(f"✅ INBOUND: {_is['original_rows']} rows → {_is['ae_backend']} via BACKEND, {_is['sheet2_match']} via Sheet2, {_is['no_deal_id']} No deal ID")
+                        except Exception as e:
+                            st.error(f"❌ Error reading INBOUND file {_tf.name}: {e}")
+                            st.stop()
+                
+                elif is_eval_file(_tf):
+                    with st.spinner(f"Processing EVAL file: {_tf.name}..."):
+                        try:
+                            _edf, _es = process_eval(_tf)
+                            frames.append(_edf)
+                            eval_stats.append(_es)
+                            st.success(f"✅ EVAL: {_es['original_rows']} rows → {_es['ae_backend']} via BACKEND, {_es['sheet2_match']} via Sheet2, {_es['no_deal_id']} No deal ID")
+                        except Exception as e:
+                            st.error(f"❌ Error reading EVAL file {_tf.name}: {e}")
+                            st.stop()
+                
+                elif is_lv_error_box_file(_tf):
+                    with st.spinner(f"Processing LV ERROR BOX file: {_tf.name}..."):
+                        try:
+                            _lvef, _lves = process_lv_error_box(_tf)
+                            frames.append(_lvef)
+                            lv_error_stats.append(_lves)
+                            st.success(f"✅ LV ERROR BOX: {_lves['original_rows']} rows (all marked 'No deal ID')")
+                        except Exception as e:
+                            st.error(f"❌ Error reading LV ERROR BOX file {_tf.name}: {e}")
+                            st.stop()
+                
+                elif is_low_value_file(_tf):
                     with st.spinner(f"Processing Low Value file: {_tf.name}..."):
                         try:
                             _lv_df = build_low_value_template(_tf)
@@ -3404,7 +3814,9 @@ if has_stocktake and stack_file:
                         except Exception as e:
                             st.error(f"❌ Error reading Low Value file {_tf.name}: {e}")
                             st.stop()
+                
                 else:
+                    # Regular totes file
                     with st.spinner(f"Processing totes file: {_tf.name}..."):
                         try:
                             _tdf, _ts = process_totes(_tf)
@@ -3417,8 +3829,16 @@ if has_stocktake and stack_file:
                         except Exception as e:
                             st.error(f"❌ Error reading {_tf.name}: {e}")
                             st.stop()
+            
+            # Concatenate all totes-related files
             if t_frames:
                 frames.append(pd.concat(t_frames, ignore_index=True))
+            if inbound_frames:
+                frames.append(pd.concat(inbound_frames, ignore_index=True))
+            if eval_frames:
+                frames.append(pd.concat(eval_frames, ignore_index=True))
+            if lv_error_frames:
+                frames.append(pd.concat(lv_error_frames, ignore_index=True))
 
         with st.spinner("Reading Stack Bulk Upload..."):
             stack_df, stack_warn = read_stack_bulk(stack_file)
@@ -3463,17 +3883,122 @@ if has_stocktake and stack_file:
 
                 master_df = pd.concat([master_df, lv_combined], ignore_index=True) if not master_df.empty else lv_combined
 
+            # Final cleanup: Remove rows with BOTH empty IMEI AND empty Location
+            # These rows have no useful tracking information
+            if not master_df.empty:
+                master_df = master_df[
+                    ~((master_df['IMEI'].astype(str).str.strip() == '') & 
+                      (master_df['Location'].astype(str).str.strip() == ''))
+                ].reset_index(drop=True)
+
             st.session_state.master_df_result = master_df
+            
+            # Debug: Show what's in master_df
+            st.write(f"DEBUG: master_df has {len(master_df)} rows")
+            st.write(f"DEBUG: Rooms in master_df: {master_df['Room'].value_counts().to_dict()}")
+            
+            # Store stats in session state for persistent display
+            st.session_state.h_stats = h_stats
+            st.session_state.t_stats = t_stats
+            st.session_state.inbound_stats = inbound_stats
+            st.session_state.eval_stats = eval_stats
+            st.session_state.lv_error_stats = lv_error_stats
+            st.session_state.lv_row_count = sum(len(f) for f in lv_frames) if lv_frames else 0
+            st.session_state.stack_df_len = len(stack_df)
+            
+            # Store frame data for individual downloads
+            st.session_state.inbound_frames = inbound_frames if inbound_frames else []
+            st.session_state.eval_frames = eval_frames if eval_frames else []
+            st.session_state.lv_error_frames = lv_error_frames if lv_error_frames else []
+            st.session_state.lv_frames = lv_frames if lv_frames else []
+            st.session_state.lookup = lookup
+            
+        st.success("✅ Master template generated successfully!")
 
-        # ── Stats ─────────────────────────────────────────────────────────────
+elif not has_stocktake or not stack_file:
+    pass  # warnings already shown above
+
+# ── Download buttons — shown when master template exists ─────────────────────
+if has_stocktake and stack_file and st.session_state.get('master_df_result') is not None:
+    master_df = st.session_state.master_df_result
+    
+    # ── Processing Stats (Persistent) ─────────────────────────────────────────
+    h_stats = st.session_state.get('h_stats')
+    t_stats = st.session_state.get('t_stats') 
+    inbound_stats = st.session_state.get('inbound_stats', [])
+    eval_stats = st.session_state.get('eval_stats', [])
+    lv_error_stats = st.session_state.get('lv_error_stats', [])
+    lv_row_count = st.session_state.get('lv_row_count', 0)
+    stack_df_len = st.session_state.get('stack_df_len', 0)
+    
+    # Get frame data for individual downloads
+    inbound_frames = st.session_state.get('inbound_frames', [])
+    eval_frames = st.session_state.get('eval_frames', [])
+    lv_error_frames = st.session_state.get('lv_error_frames', [])
+    lv_frames = st.session_state.get('lv_frames', [])
+    lookup = st.session_state.get('lookup', {})
+
+    # Show processing stats if available
+    if h_stats or t_stats or inbound_stats or eval_stats or lv_error_stats or lv_row_count:
         st.markdown("### 📊 Processing Summary")
+        
+        # Show stats for new file types first
+        if inbound_stats:
+            st.markdown("**INBOUND Processing**")
+            # Combine all INBOUND stats
+            total_inbound = {
+                'original_rows': sum(s['original_rows'] for s in inbound_stats),
+                'ae_backend': sum(s['ae_backend'] for s in inbound_stats),
+                'sheet2_match': sum(s['sheet2_match'] for s in inbound_stats),
+                'no_deal_id': sum(s['no_deal_id'] for s in inbound_stats),
+            }
+            ic1, ic2, ic3, ic4 = st.columns(4)
+            with ic1:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#4472C4;">{total_inbound["original_rows"]:,}</div><div class="metric-lbl">INBOUND Rows</div></div>', unsafe_allow_html=True)
+            with ic2:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#70AD47;">{total_inbound["ae_backend"]:,}</div><div class="metric-lbl">AE from BACKEND</div></div>', unsafe_allow_html=True)
+            with ic3:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#9B59B6;">{total_inbound["sheet2_match"]:,}</div><div class="metric-lbl">Sheet2 Matches</div></div>', unsafe_allow_html=True)
+            with ic4:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{total_inbound["no_deal_id"]:,}</div><div class="metric-lbl">No Deal ID</div></div>', unsafe_allow_html=True)
 
-        lv_row_count = sum(len(f) for f in lv_frames) if lv_frames else 0
+        if eval_stats:
+            st.markdown("**EVAL Processing**")
+            # Combine all EVAL stats
+            total_eval = {
+                'original_rows': sum(s['original_rows'] for s in eval_stats),
+                'ae_backend': sum(s['ae_backend'] for s in eval_stats),
+                'sheet2_match': sum(s['sheet2_match'] for s in eval_stats),
+                'no_deal_id': sum(s['no_deal_id'] for s in eval_stats),
+            }
+            ec1, ec2, ec3, ec4 = st.columns(4)
+            with ec1:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#4472C4;">{total_eval["original_rows"]:,}</div><div class="metric-lbl">EVAL Rows</div></div>', unsafe_allow_html=True)
+            with ec2:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#70AD47;">{total_eval["ae_backend"]:,}</div><div class="metric-lbl">AE from BACKEND</div></div>', unsafe_allow_html=True)
+            with ec3:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#9B59B6;">{total_eval["sheet2_match"]:,}</div><div class="metric-lbl">Sheet2 Matches</div></div>', unsafe_allow_html=True)
+            with ec4:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{total_eval["no_deal_id"]:,}</div><div class="metric-lbl">No Deal ID</div></div>', unsafe_allow_html=True)
 
+        if lv_error_stats:
+            st.markdown("**LV ERROR BOX Processing**")
+            # Combine all LV ERROR BOX stats
+            total_lv_error = {
+                'original_rows': sum(s['original_rows'] for s in lv_error_stats),
+                'no_deal_id': sum(s['no_deal_id'] for s in lv_error_stats),
+            }
+            lec1, lec2, _, _ = st.columns(4)
+            with lec1:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#4472C4;">{total_lv_error["original_rows"]:,}</div><div class="metric-lbl">LV ERROR Rows</div></div>', unsafe_allow_html=True)
+            with lec2:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{total_lv_error["no_deal_id"]:,}</div><div class="metric-lbl">No Deal ID</div></div>', unsafe_allow_html=True)
+
+        # Traditional Hanger/Totes stats (if any)
         if h_stats and t_stats:
             # Both hanger and totes uploaded — show side by side
-            hc1, hc2, hc3, hc4 = st.columns(4)
             st.markdown("**Hanger**")
+            hc1, hc2, hc3, hc4 = st.columns(4)
             with hc1:
                 st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#4472C4;">{h_stats["original_rows"]:,}</div><div class="metric-lbl">Hanger Rows</div></div>', unsafe_allow_html=True)
             with hc2:
@@ -3494,105 +4019,226 @@ if has_stocktake and stack_file:
             with tc4:
                 st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{t_stats["no_deal_id"]:,}</div><div class="metric-lbl">No Deal ID</div></div>', unsafe_allow_html=True)
 
-            if lv_row_count:
-                st.markdown("**Low Value**")
-                lvc1, _, _, _ = st.columns(4)
-                with lvc1:
-                    st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#9B59B6;">{lv_row_count:,}</div><div class="metric-lbl">Low Value Rows</div></div>', unsafe_allow_html=True)
-
-        else:
+        elif h_stats or t_stats:
+            # Single file type
             stats = h_stats or t_stats
             source = "Hanger" if h_stats else "Totes"
-            if stats:
-                c1, c2, c3, c4, c5 = st.columns(5)
-                metrics = [
-                    (c1, stats['original_rows'], f"Total {source} Rows", "#4472C4"),
-                    (c2, stats['ae_deal_id'],    "AE from Deal ID",      "#E74C3C"),
-                    (c3, stats['ae_backend'],    "AE from BACKEND",      "#70AD47"),
-                    (c4, stats['no_deal_id'],    "No Deal ID",           "#E74C3C"),
-                    (c5, len(stack_df),          "Stack Records",        "#8E44AD"),
-                ]
-                for col, val, lbl, color in metrics:
-                    with col:
-                        st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:{color};">{val:,}</div><div class="metric-lbl">{lbl}</div></div>', unsafe_allow_html=True)
+            st.markdown(f"**{source}**")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#4472C4;">{stats["original_rows"]:,}</div><div class="metric-lbl">Total {source} Rows</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{stats["ae_deal_id"]:,}</div><div class="metric-lbl">AE from Deal ID</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#70AD47;">{stats["ae_backend"]:,}</div><div class="metric-lbl">AE from BACKEND</div></div>', unsafe_allow_html=True)
+            with c4:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#E74C3C;">{stats["no_deal_id"]:,}</div><div class="metric-lbl">No Deal ID</div></div>', unsafe_allow_html=True)
+            with c5:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#8E44AD;">{stack_df_len:,}</div><div class="metric-lbl">Stack Records</div></div>', unsafe_allow_html=True)
 
-            elif lv_row_count:
-                lvc1, _, _ = st.columns(3)
-                with lvc1:
-                    st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#9B59B6;">{lv_row_count:,}</div><div class="metric-lbl">Low Value Rows</div></div>', unsafe_allow_html=True)
+        if lv_row_count > 0:
+            st.markdown("**Low Value**")
+            lvc1, _, _, _ = st.columns(4)
+            with lvc1:
+                st.markdown(f'<div class="metric-box"><div class="metric-num" style="color:#9B59B6;">{lv_row_count:,}</div><div class="metric-lbl">Low Value Rows</div></div>', unsafe_allow_html=True)
 
-        # ── Match stats ───────────────────────────────────────────────────────
+        # Individual File Downloads section
+        if inbound_frames or eval_frames or lv_error_frames or lv_frames or h_stats or t_stats:
+            st.markdown("### 📥 Individual File Downloads")
+            dl1, dl2, dl3 = st.columns(3)
+            
+            with dl1:
+                if inbound_stats:
+                    # INBOUND download - use only INBOUND frames
+                    try:
+                        if inbound_frames:
+                            inbound_combined = pd.concat(inbound_frames, ignore_index=True)
+                            inbound_master = build_master_template(inbound_combined, lookup)
+                            st.download_button(
+                                label=f"⬇️ INBOUND Only ({len(inbound_master):,} rows)",
+                                data=export_excel(inbound_master),
+                                file_name=f"INBOUND_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="dl_inbound_only_main"
+                            )
+                        else:
+                            st.info("No INBOUND data available")
+                    except Exception as e:
+                        st.error(f"INBOUND download error: {e}")
+                elif h_stats:
+                    # Hanger download - use session state data
+                    try:
+                        # We need to recreate hanger data from files since we don't store it separately
+                        st.info("Hanger download available after regenerating template")
+                    except Exception as e:
+                        st.error(f"Hanger download error: {e}")
+                else:
+                    st.info("No INBOUND/Hanger data available")
+            
+            with dl2:
+                if eval_stats:
+                    # EVAL download - use only EVAL frames
+                    try:
+                        if eval_frames:
+                            eval_combined = pd.concat(eval_frames, ignore_index=True)
+                            eval_master = build_master_template(eval_combined, lookup)
+                            st.download_button(
+                                label=f"⬇️ EVAL Only ({len(eval_master):,} rows)",
+                                data=export_excel(eval_master),
+                                file_name=f"EVAL_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="dl_eval_only_main"
+                            )
+                        else:
+                            st.info("No EVAL data available")
+                    except Exception as e:
+                        st.error(f"EVAL download error: {e}")
+                elif t_stats:
+                    # Totes download - use session state data
+                    try:
+                        # We need to recreate totes data from files since we don't store it separately
+                        st.info("Totes download available after regenerating template")
+                    except Exception as e:
+                        st.error(f"Totes download error: {e}")
+                else:
+                    st.info("No EVAL/Totes data available")
+            
+            with dl3:
+                if lv_error_stats:
+                    # LV ERROR BOX download - use only LV ERROR frames
+                    try:
+                        if lv_error_frames:
+                            lv_error_combined = pd.concat(lv_error_frames, ignore_index=True)
+                            lv_error_master = build_master_template(lv_error_combined, lookup)
+                            st.download_button(
+                                label=f"⬇️ LV ERROR Only ({len(lv_error_master):,} rows)",
+                                data=export_excel(lv_error_master),
+                                file_name=f"LV_ERROR_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="dl_lv_error_only_main"
+                            )
+                        else:
+                            st.info("No LV ERROR data available")
+                    except Exception as e:
+                        st.error(f"LV ERROR download error: {e}")
+                elif lv_frames:
+                    # Low Value download
+                    try:
+                        lv_combined = pd.concat(lv_frames, ignore_index=True)
+                        st.download_button(
+                            label=f"⬇️ Low Value Only ({len(lv_combined):,} rows)",
+                            data=export_excel(lv_combined),
+                            file_name=f"LowValue_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key="dl_lv_only_main"
+                        )
+                    except Exception as e:
+                        st.error(f"Low Value download error: {e}")
+                else:
+                    st.info("No LV ERROR/Low Value data available")
+        
         st.markdown("---")
-        matched = master_df[
-            (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] != '')
-        ].shape[0]
-        unmatched = master_df[
-            (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] == '')
-        ].shape[0]
+    
+    st.markdown("---")
+    st.markdown("### 📊 Master Template Results")
+    
+    # ── Match stats ───────────────────────────────────────────────────────
+    matched = master_df[
+        (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] != '')
+    ].shape[0]
+    unmatched = master_df[
+        (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] == '')
+    ].shape[0]
 
-        mc1, mc2, mc3 = st.columns(3)
-        with mc1:
-            st.markdown(f"""
-            <div class="success-card">
-                <strong>✅ Matched from Stack Bulk</strong><br>
-                <span style="font-size:1.8rem; font-weight:700;">{matched:,}</span> rows
-            </div>
-            """, unsafe_allow_html=True)
-        with mc2:
-            st.markdown(f"""
-            <div class="warn-card">
-                <strong>⚠️ AE Deal ID — Not in Stack Bulk</strong><br>
-                <span style="font-size:1.8rem; font-weight:700;">{unmatched:,}</span> rows
-            </div>
-            """, unsafe_allow_html=True)
-        with mc3:
-            st.markdown(f"""
-            <div class="info-card">
-                <strong>📋 Total Output Rows</strong><br>
-                <span style="font-size:1.8rem; font-weight:700;">{len(master_df):,}</span> rows
-            </div>
-            """, unsafe_allow_html=True)
+    # Store filtered dataframes for downloads
+    matched_df = master_df[
+        (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] != '')
+    ]
+    unmatched_df = master_df[
+        (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] == '')
+    ]
 
-        # ── Preview ───────────────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 👀 Preview")
-        tab1, tab2, tab3 = st.tabs(["✅ Matched Rows", "⚠️ Unmatched AE Rows", "📋 All Rows"])
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        st.markdown(f"""
+        <div class="success-card">
+            <strong>✅ Matched from Stack Bulk</strong><br>
+            <span style="font-size:1.8rem; font-weight:700;">{matched:,}</span> rows
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with mc2:
+        st.markdown(f"""
+        <div class="warn-card">
+            <strong>⚠️ AE Deal ID — Not in Stack Bulk</strong><br>
+            <span style="font-size:1.8rem; font-weight:700;">{unmatched:,}</span> rows
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with mc3:
+        st.markdown(f"""
+        <div class="info-card">
+            <strong>📋 Total Output Rows</strong><br>
+            <span style="font-size:1.8rem; font-weight:700;">{len(master_df):,}</span> rows
+        </div>
+        """, unsafe_allow_html=True)
 
-        with tab1:
-            matched_df = master_df[
-                (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] != '')
-            ]
-            st.dataframe(matched_df.head(50), use_container_width=True)
-            st.caption(f"Showing first 50 of {len(matched_df):,} matched rows")
-
-        with tab2:
-            unmatched_df = master_df[
-                (master_df['Deal Id'] != 'No deal ID') & (master_df['Category'] == '')
-            ]
-            st.dataframe(unmatched_df.head(50), use_container_width=True)
-            st.caption(f"Showing first 50 of {len(unmatched_df):,} rows — AE deal ID found but not in Stack Bulk")
-
-        with tab3:
-            st.dataframe(master_df.head(50), use_container_width=True)
-            st.caption(f"Showing first 50 of {len(master_df):,} total rows")
-
-        # ── Download ──────────────────────────────────────────────────────────
-        st.markdown("---")
-        with st.spinner("Preparing Excel file..."):
-            excel_bytes = export_excel(master_df)
-
-        filename = f"Master_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # Download buttons row
+    st.markdown("### 📥 Download Options")
+    dc1, dc2, dc3 = st.columns(3)
+    
+    with dc1:
+        if len(matched_df) > 0:
+            st.download_button(
+                label=f"⬇️ Matched Rows ({len(matched_df):,})",
+                data=export_excel(matched_df),
+                file_name=f"Matched_Rows_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_matched_persistent"
+            )
+    
+    with dc2:
+        if len(unmatched_df) > 0:
+            st.download_button(
+                label=f"⬇️ Unmatched AE ({len(unmatched_df):,})",
+                data=export_excel(unmatched_df),
+                file_name=f"Unmatched_AE_Rows_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_unmatched_persistent"
+            )
+    
+    with dc3:
         st.download_button(
-            label=f"⬇️ Download Master Template — {len(master_df):,} rows",
-            data=excel_bytes,
-            file_name=filename,
+            label=f"⬇️ Complete Master Template ({len(master_df):,})",
+            data=export_excel(master_df),
+            file_name=f"Master_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
             use_container_width=True,
+            type="primary",
+            key="dl_all_persistent"
         )
 
-elif not has_stocktake or not stack_file:
-    pass  # warnings already shown above
+    # ── Preview ───────────────────────────────────────────────────────────
+    st.markdown("### 👀 Preview")
+    tab1, tab2, tab3 = st.tabs(["✅ Matched Rows", "⚠️ Unmatched AE Rows", "📋 All Rows"])
+
+    with tab1:
+        st.dataframe(matched_df.head(50), use_container_width=True)
+        st.caption(f"Showing first 50 of {len(matched_df):,} matched rows")
+
+    with tab2:
+        st.dataframe(unmatched_df.head(50), use_container_width=True)
+        st.caption(f"Showing first 50 of {len(unmatched_df):,} rows — AE deal ID found but not in Stack Bulk")
+
+    with tab3:
+        st.dataframe(master_df.head(50), use_container_width=True)
+        st.caption(f"Showing first 50 of {len(master_df):,} total rows")
 
 # ── Dashboard buttons — shown whenever hanger/totes is uploaded ──────────────
 if has_stocktake:
