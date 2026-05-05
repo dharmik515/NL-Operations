@@ -3746,6 +3746,13 @@ if has_stocktake and stack_file:
         eval_stats = []     # Store stats for all EVAL files
         lv_error_stats = [] # Store stats for all LV ERROR BOX files
         lv_frames = []   # Low Value rows — processed separately, merged at end
+        # Per-type frame lists initialized up-front so the Individual Downloads
+        # section can reference them even when one upload slot is empty.
+        h_frames = []
+        t_frames = []
+        inbound_frames = []
+        eval_frames = []
+        lv_error_frames = []
 
         if hanger_files:
             h_frames = []
@@ -4067,10 +4074,20 @@ if has_stocktake and stack_file and st.session_state.get('master_df_result') is 
                     except Exception as e:
                         st.error(f"INBOUND download error: {e}")
                 elif h_stats:
-                    # Hanger download - use session state data
                     try:
-                        # We need to recreate hanger data from files since we don't store it separately
-                        st.info("Hanger download available after regenerating template")
+                        if h_frames:
+                            hanger_combined = pd.concat(h_frames, ignore_index=True)
+                            hanger_master = build_master_template(hanger_combined, lookup)
+                            st.download_button(
+                                label=f"⬇️ Hanger Only ({len(hanger_master):,} rows)",
+                                data=export_excel(hanger_master),
+                                file_name=f"Hanger_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="dl_hanger_only_main"
+                            )
+                        else:
+                            st.info("No Hanger data available")
                     except Exception as e:
                         st.error(f"Hanger download error: {e}")
                 else:
@@ -4096,10 +4113,20 @@ if has_stocktake and stack_file and st.session_state.get('master_df_result') is 
                     except Exception as e:
                         st.error(f"EVAL download error: {e}")
                 elif t_stats:
-                    # Totes download - use session state data
                     try:
-                        # We need to recreate totes data from files since we don't store it separately
-                        st.info("Totes download available after regenerating template")
+                        if t_frames:
+                            totes_combined = pd.concat(t_frames, ignore_index=True)
+                            totes_master = build_master_template(totes_combined, lookup)
+                            st.download_button(
+                                label=f"⬇️ Totes Only ({len(totes_master):,} rows)",
+                                data=export_excel(totes_master),
+                                file_name=f"Totes_Template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="dl_totes_only_main"
+                            )
+                        else:
+                            st.info("No Totes data available")
                     except Exception as e:
                         st.error(f"Totes download error: {e}")
                 else:
