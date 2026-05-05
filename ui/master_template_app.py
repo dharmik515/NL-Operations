@@ -3852,8 +3852,6 @@ if has_stocktake and stack_file:
             if stack_df is None:
                 st.error("❌ Could not read the Stack Bulk Upload file. Try opening it in Excel and saving as a new .xlsx file, then re-upload.")
                 st.stop()
-            if stack_warn and stack_warn != "ERROR":
-                st.warning(f"⚠️ {stack_warn}")
 
         with st.spinner("Building lookup and generating master template..."):
             lookup = build_lookup(stack_df)
@@ -3899,11 +3897,7 @@ if has_stocktake and stack_file:
                 ].reset_index(drop=True)
 
             st.session_state.master_df_result = master_df
-            
-            # Debug: Show what's in master_df
-            st.write(f"DEBUG: master_df has {len(master_df)} rows")
-            st.write(f"DEBUG: Rooms in master_df: {master_df['Room'].value_counts().to_dict()}")
-            
+
             # Store stats in session state for persistent display
             st.session_state.h_stats = h_stats
             st.session_state.t_stats = t_stats
@@ -3914,6 +3908,8 @@ if has_stocktake and stack_file:
             st.session_state.stack_df_len = len(stack_df)
             
             # Store frame data for individual downloads
+            st.session_state.h_frames = h_frames if h_frames else []
+            st.session_state.t_frames = t_frames if t_frames else []
             st.session_state.inbound_frames = inbound_frames if inbound_frames else []
             st.session_state.eval_frames = eval_frames if eval_frames else []
             st.session_state.lv_error_frames = lv_error_frames if lv_error_frames else []
@@ -3939,6 +3935,8 @@ if has_stocktake and stack_file and st.session_state.get('master_df_result') is 
     stack_df_len = st.session_state.get('stack_df_len', 0)
     
     # Get frame data for individual downloads
+    h_frames = st.session_state.get('h_frames', [])
+    t_frames = st.session_state.get('t_frames', [])
     inbound_frames = st.session_state.get('inbound_frames', [])
     eval_frames = st.session_state.get('eval_frames', [])
     lv_error_frames = st.session_state.get('lv_error_frames', [])
