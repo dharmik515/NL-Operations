@@ -2825,14 +2825,12 @@ def show_diagnostics(hanger_files, totes_files, master_df, lv_files=None):  # no
 
     if totes_raw is not None:
         real_totes = totes_raw[totes_raw['IMEI'].apply(_is_real_device)]
-        empty_totes = totes_raw[~totes_raw['IMEI'].apply(_is_real_device)]
 
-        t1, t2, t3, t4 = st.columns(4)
+        t1, t2, t3 = st.columns(3)
         for col, val, lbl, color in [
             (t1, len(real_totes),  'Devices in Totes', '#4472C4'),
-            (t2, len(empty_totes), 'Empty Tote Slots',  '#FFC000'),
-            (t3, int(real_totes['LOA'].nunique()), 'Unique Tote IDs', '#70AD47'),
-            (t4, int((real_totes['Deal ID'].astype(str).str.contains('AE', na=False) == False).sum()), 'No Deal ID', '#E74C3C'),
+            (t2, int(real_totes['LOA'].nunique()), 'Unique Tote IDs', '#70AD47'),
+            (t3, int((real_totes['Deal ID'].astype(str).str.contains('AE', na=False) == False).sum()), 'No Deal ID', '#E74C3C'),
         ]:
             with col:
                 st.markdown(f"""
